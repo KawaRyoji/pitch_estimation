@@ -1,2 +1,3 @@
 __pycache__/**
 resources/**
+.mypy_cache/**
