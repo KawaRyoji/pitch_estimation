@@ -51,12 +51,13 @@ da_net = DA_Net(
 frame_lens = [1024]
 normalize = [True, False]
 frame_shift = 256
-train_method = "holdout"
+train_method = "kcv"
 dataset_params = DatasetParams(
     batch_size=32,
     epochs=100,
     batches_per_epoch=500,
 )
+k = 5
 valid_split = 0.8
 
 for frame_len, norm in itertools.product(frame_lens, normalize):
@@ -64,7 +65,7 @@ for frame_len, norm in itertools.product(frame_lens, normalize):
         frame_len=frame_len, frame_shift=frame_shift, normalize=norm
     )
 
-    root_dir = "./results/CREPE/waveform/l{}_s{}_n{}".format(
+    root_dir = "./results/DA-Net/waveform/l{}_s{}_n{}".format(
         frame_len, frame_shift, norm
     )
 
@@ -75,6 +76,7 @@ for frame_len, norm in itertools.product(frame_lens, normalize):
         test_set=test_set,
         dataset_params=dataset_params,
         train_method=train_method,
+        k=k,
         valid_split=valid_split,
         gpu=0,
     )

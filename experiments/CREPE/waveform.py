@@ -57,6 +57,7 @@ dataset_params = DatasetParams(
     epochs=100,
     batches_per_epoch=500,
 )
+k = 5
 valid_split = 0.8
 
 for frame_len, norm in itertools.product(frame_lens, normalize):
@@ -75,6 +76,7 @@ for frame_len, norm in itertools.product(frame_lens, normalize):
         test_set=test_set,
         dataset_params=dataset_params,
         train_method=train_method,
+        k=k,
         valid_split=valid_split,
         gpu=0,
     )
