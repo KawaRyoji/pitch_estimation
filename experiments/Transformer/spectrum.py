@@ -7,7 +7,7 @@ from audio_processing.audio import FrameParameter, SpectrumParameter
 from pitch_estimation.models import Transformer
 from pitch_estimation.musicnet import MusicNet
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.metrics import Precision, Recall
+from tensorflow.keras.metrics import Precision, Recall, AUC
 from tensorflow_addons.metrics import F1Score
 
 musicnet = MusicNet("./resources/musicnet16k")
@@ -48,7 +48,7 @@ normalize = [True, False]
 frame_shift = 256
 time_len = 16
 fft_point = 2048
-train_method = "holdout"
+train_method = "kcv"
 dataset_params = DatasetParams(
     batch_size=32,
     epochs=100,
@@ -65,6 +65,7 @@ transformer = Transformer(
         Precision(name="precision"),
         Recall(name="recall"),
         F1Score(num_classes=128, threshold=0.5, average="micro", name="F1"),
+        AUC(curve="PR"),
     ],
 )
 

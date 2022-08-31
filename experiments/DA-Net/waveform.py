@@ -7,7 +7,7 @@ from audio_processing.audio import FrameParameter
 from pitch_estimation.models import DA_Net
 from pitch_estimation.musicnet import MusicNet
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.metrics import Precision, Recall
+from tensorflow.keras.metrics import Precision, Recall, AUC
 from tensorflow_addons.metrics import F1Score
 
 musicnet = MusicNet("./resources/musicnet16k")
@@ -45,6 +45,7 @@ da_net = DA_Net(
         Precision(name="precision"),
         Recall(name="recall"),
         F1Score(num_classes=128, threshold=0.5, average="micro", name="F1"),
+        AUC(curve="PR"),
     ],
 )
 
