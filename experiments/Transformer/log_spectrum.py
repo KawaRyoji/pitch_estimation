@@ -16,10 +16,10 @@ musicnet = MusicNet("./resources/musicnet16k")
 def prepare_dataset(
     frame_len: int, frame_shift: int, time_len: int, normalize: bool, fft_point: int
 ):
-    train_path = "./resources/datasets/log_spectrum/train_l{}_s{}_t{}_n{}.npz".format(
+    train_path = "./resources/datasets/log_spectrum2D/train_l{}_s{}_t{}_n{}.npz".format(
         frame_len, frame_shift, time_len, normalize
     )
-    test_path = "./resources/datasets/log_spectrum/test_l{}_s{}_t{}_n{}.npz".format(
+    test_path = "./resources/datasets/log_spectrum2D/test_l{}_s{}_t{}_n{}.npz".format(
         frame_len, frame_shift, time_len, normalize
     )
 
@@ -58,7 +58,7 @@ k = 5
 valid_split = 0.8
 
 transformer = Transformer(
-    Transformer.Params(time_len=time_len),
+    Transformer.Params(data_length=time_len),
     "binary_crossentropy",
     Adam(learning_rate=0.0001),
     metrics=[
@@ -97,3 +97,5 @@ for frame_len, norm in itertools.product(frame_lens, normalize):
     experiment.train()
     experiment.test()
     experiment.plot()
+    del train_set
+    del test_set
