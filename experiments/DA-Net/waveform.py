@@ -1,13 +1,13 @@
 import itertools
 import os
 
+from audio_processing.audio import FrameParameter
 from deep_learning.dataset import Dataset, DatasetParams
 from deep_learning.experiment import DNNExperiment
-from audio_processing.audio import FrameParameter
-from pitch_estimation.models import DA_Net
+from pitch_estimation.models.DA_Net import DA_Net
 from pitch_estimation.musicnet import MusicNet
+from tensorflow.keras.metrics import AUC, Precision, Recall
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.metrics import Precision, Recall, AUC
 from tensorflow_addons.metrics import F1Score
 
 musicnet = MusicNet("./resources/musicnet16k")
