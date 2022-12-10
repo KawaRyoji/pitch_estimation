@@ -58,11 +58,3 @@ class MultiHeadAttention(Layer):
 class SelfAttention(MultiHeadAttention):
     def call(self, input: tf.Tensor, mask: tf.Tensor) -> tf.Tensor:
         return super().call(input, memory=input, mask=mask)
-
-class GLU(Layer):
-    def __init__(self, dim, trainable=True, name=None, dtype=None, dynamic=False, **kwargs):
-        super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.dim = dim
-        
-    def call(self, inputs, *args, **kwargs):
-        tf.split()

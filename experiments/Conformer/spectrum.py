@@ -1,18 +1,20 @@
 import itertools
+import os
 
 from deep_learning.dataset import DatasetParams
 from deep_learning.experiment import DNNExperiment
-from pitch_estimation.experiments.prepare_dataset import waveform_2d
+from pitch_estimation.experiments.prepare_dataset import spectrum_2d
 from pitch_estimation.models.Transformer import Transformer
 from tensorflow.keras.metrics import AUC, Precision, Recall
 from tensorflow.keras.optimizers import Adam
 from tensorflow_addons.metrics import F1Score
 
 
-frame_lens = [1024]
+frame_lens = [512, 1024, 2048]
 normalize = [True, False]
 frame_shift = 256
 frame_num = 16
+fft_point = 2048
 train_method = "kcv"
 dataset_params = DatasetParams(
     batch_size=32,
@@ -35,15 +37,16 @@ transformer = Transformer(
 )
 
 for frame_len, norm in itertools.product(frame_lens, normalize):
-    train_set, test_set = waveform_2d(
+    train_set, test_set = spectrum_2d(
         dir="./resources/datasets",
         frame_len=frame_len,
         frame_shift=frame_shift,
         frame_num=frame_num,
         normalize=norm,
+        fft_point=fft_point,
     )
 
-    root_dir = "./results/Transformer/waveform/l{}_s{}_t{}_n{}".format(
+    root_dir = "./results/Transformer/spectrum/l{}_s{}_t{}_n{}".format(
         frame_len, frame_shift, frame_num, norm
     )
 

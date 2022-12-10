@@ -1,142 +1,89 @@
 from dataclasses import dataclass, field
+from typing import Tuple
 
 from deep_learning.dnn import DNN, ModelParams
-from pitch_estimation.layers.common import GLU
 from tensorflow.keras import Model
-from tensorflow.keras.layers import (
-    LayerNormalization,
-    Conv2D,
-    BatchNormalization,
-    Add,
-    MultiHeadAttention,
-    Dense,
-    Dropout,
-    Layer,
-    Input,
-    MaxPool2D,
-    Permute,
-    Reshape,
-)
-import tensorflow as tf
+from tensorflow.keras.layers import Dense, Dropout, Input
+from conformer_tf import ConformerBlock
 
 
 class Conformer(DNN):
     @dataclass
     class Params(ModelParams):
+        input_size: Tuple[int, int] = field(default=(1024, 128))
         encoder_layers: int = field(default=16)
         encoder_dim: int = field(default=256)
-        ffn_inner_dim_factor: int = field(default=4)
         attention_heads: int = field(default=4)
+        ffn_inner_dim_factor: int = field(default=4)
+        conv_inner_dim_factor: int = field(default=2)
         kernel_size: int = field(default=32)
         dropout_rate: float = field(default=0.1)
+        output_dim: int = field(default=128)
+
+        @classmethod
+        def small(cls, input_size=(1024, 128), output_dim=128) -> "Conformer.Params":
+            return cls(
+                input_size=input_size,
+                encoder_layers=16,
+                encoder_dim=144,
+                attention_heads=4,
+                kernel_size=32,
+                ffn_inner_dim_factor=4,
+                conv_inner_dim_factor=2,
+                dropout_rate=0.1,
+                output_dim=output_dim,
+            )
+
+        @classmethod
+        def medium(cls, input_size=(1024, 128), output_dim=128) -> "Conformer.Params":
+            return cls(
+                input_size=input_size,
+                encoder_layers=16,
+                encoder_dim=256,
+                attention_heads=4,
+                kernel_size=32,
+                ffn_inner_dim_factor=4,
+                conv_inner_dim_factor=2,
+                dropout_rate=0.1,
+                output_dim=output_dim,
+            )
+
+        @classmethod
+        def large(cls, input_size=(1024, 128), output_dim=128) -> "Conformer.Params":
+            return cls(
+                input_size=input_size,
+                encoder_layers=17,
+                encoder_dim=512,
+                attention_heads=8,
+                kernel_size=32,
+                ffn_inner_dim_factor=4,
+                conv_inner_dim_factor=2,
+                dropout_rate=0.1,
+                output_dim=output_dim,
+            )
 
     def definition(self, param: Params) -> Model:
-        return super().definition(param)
+        x = Input(shape=param.input_size, name="input", dtype="float32")
 
+        y = Dense(param.encoder_dim, name="fix_dim")(x)  # 入力の次元をEncoder Dim に調整
+        y = Dropout(param.dropout_rate, name="input-do")(y)
 
-class FeedForwardModule(Layer):
-    def __init__(
-        self,
-        layer_num: int,
-        input_dim: int,
-        inner_dim_factor: int = 4,
-        dropout_rate: float = 0.1,
-        scale_factor: float = 0.5,
-        trainable=True,
-        name="ffn",
-        dtype=None,
-        dynamic=False,
-        **kwargs
-    ) -> None:
-        super().__init__(trainable, name, dtype, dynamic, **kwargs)
+        for i in range(param.encoder_layers):
+            y = ConformerBlock(
+                dim=param.encoder_dim,
+                dim_head=param.encoder_dim // param.attention_heads,
+                heads=param.attention_heads,
+                ff_mult=param.ffn_inner_dim_factor,
+                conv_expansion_factor=2,
+                conv_kernel_size=param.kernel_size,
+                attn_dropout=param.dropout_rate,
+                ff_dropout=param.dropout_rate,
+                conv_dropout=param.dropout_rate,
+                name="conformer%d" % i,
+            )(y)
 
-        self.inner_dim_factor = inner_dim_factor
-        self.scale_factor = scale_factor
+        y = Dense(param.output_dim, activation="sigmoid", name="output")(y)
 
-        self.ln = LayerNormalization(name="%s-LN-%d" % (name, layer_num))
-        self.ffn1 = Dense(
-            input_dim * inner_dim_factor,
-            name="%s-in-D1-%d" % (name, layer_num),
-            activation="swish",
-        )
-        self.do1 = Dropout(dropout_rate, name="%s-DO1-%d" % (name, layer_num))
-        self.ffn2 = Dense(name="%s-out-D2-%d" % (name, layer_num))
-        self.do2 = Dropout(dropout_rate, name="%s-DO2-%d" % (name, layer_num))
-        self.res_add = Add(name="%s-Add-%d" % (name, layer_num))
+        model = Model(inputs=x, outputs=y)
 
-    def call(self, inputs, training=False) -> tf.Tensor:
-        outputs = self.ln(inputs, training=training)
-        outputs = self.ffn1(outputs, training=training)
-        outputs = self.do1(outputs, training=training)
-        outputs = self.ffn2(outputs, training=training)
-        outputs = self.do2(outputs, training=training)
-        outputs = self.res_add([inputs, self.scale_factor * outputs])
-
-        return outputs
-
-
-class ConvolutionModule(Layer):
-    def __init__(
-        self,
-        layer_num: int,
-        trainable=True,
-        name="conv",
-        dtype=None,
-        dynamic=False,
-        **kwargs
-    ) -> None:
-        super().__init__(trainable, name, dtype, dynamic, **kwargs)
-
-        self.ln = LayerNormalization(name="%s-LN-%d" % (name, layer_num))
-        self.pw_conv = Conv2D(name="%s-DwC-%d" % (name, layer_num))
-        self.glu = GLU(name="%s-GLU-%d" % (name, layer_num))
-        self.bn = BatchNormalization(name="%s-BN-%d" % (name, layer_num))
-        self.dw_conv = Conv2D(name="%s-PwC-%d" % (name, layer_num))
-        self.do = Dropout(name="%s-DO-%d" % (name, layer_num))
-        self.res_add = Add(name="%s-Add-%d" % (name, layer_num))
-
-    def call(self, inputs, *args, **kwargs) -> tf.Tensor:
-        return super().call(inputs, *args, **kwargs)
-
-
-class MultiHeadAttentionModule(Layer):
-    def __init__(
-        self,
-        layer_num: int,
-        trainable=True,
-        name="mha",
-        dtype=None,
-        dynamic=False,
-        **kwargs
-    ) -> None:
-        super().__init__(trainable, name, dtype, dynamic, **kwargs)
-
-        self.ln = LayerNormalization(name="%s-LN-%d" % (name, layer_num))
-        self.rel_mha = MultiHeadAttention(name="%s-MHA-%d" % (name, layer_num))
-        self.do = Dropout(name="%s-DO-%d" % (name, layer_num))
-        self.res_add = Add(name="%s-Add-%d" % (name, layer_num))
-
-    def call(self, inputs, *args, **kwargs) -> tf.Tensor:
-        return super().call(inputs, *args, **kwargs)
-
-
-class ConformerModule(Layer):
-    def __init__(
-        self,
-        layer_num: int,
-        trainable=True,
-        name="conf",
-        dtype=None,
-        dynamic=False,
-        **kwargs
-    ):
-        super().__init__(trainable, name, dtype, dynamic, **kwargs)
-
-        self.ffn1 = FeedForwardModule()
-        self.mha = MultiHeadAttentionModule()
-        self.conv = ConvolutionModule()
-        self.ffn2 = FeedForwardModule()
-        self.ln = LayerNormalization(name="%s-LN-%d" % (name, layer_num))
-
-    def call(self, inputs, *args, **kwargs) -> tf.Tensor:
-        return super().call(inputs, *args, **kwargs)
+        return model
