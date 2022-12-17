@@ -1,10 +1,9 @@
 import itertools
-import os
 
 from deep_learning.dataset import DatasetParams
 from deep_learning.experiment import DNNExperiment
 from pitch_estimation.experiments.prepare_dataset import spectrum_2d
-from pitch_estimation.models.Transformer import Transformer
+from pitch_estimation.models.Conformer import Conformer
 from tensorflow.keras.metrics import AUC, Precision, Recall
 from tensorflow.keras.optimizers import Adam
 from tensorflow_addons.metrics import F1Score
@@ -13,7 +12,7 @@ from tensorflow_addons.metrics import F1Score
 frame_lens = [512, 1024, 2048]
 normalize = [True, False]
 frame_shift = 256
-frame_num = 16
+frame_num = 128
 fft_point = 2048
 train_method = "kcv"
 dataset_params = DatasetParams(
@@ -24,8 +23,8 @@ dataset_params = DatasetParams(
 k = 5
 valid_split = 0.8
 
-transformer = Transformer(
-    Transformer.Params(data_length=frame_num),
+conformer = Conformer(
+    Conformer.Params.medium(input_size=(frame_num, 1024)),
     "binary_crossentropy",
     Adam(learning_rate=0.0001),
     metrics=[
@@ -35,6 +34,7 @@ transformer = Transformer(
         AUC(curve="PR"),
     ],
 )
+
 
 for frame_len, norm in itertools.product(frame_lens, normalize):
     train_set, test_set = spectrum_2d(
@@ -46,12 +46,12 @@ for frame_len, norm in itertools.product(frame_lens, normalize):
         fft_point=fft_point,
     )
 
-    root_dir = "./results/Transformer/spectrum/l{}_s{}_t{}_n{}".format(
+    root_dir = "./results/Conformer/spectrum/l{}_s{}_t{}_n{}".format(
         frame_len, frame_shift, frame_num, norm
     )
 
     experiment = DNNExperiment(
-        dnn=transformer,
+        dnn=conformer,
         root_dir=root_dir,
         train_set=train_set,
         test_set=test_set,
