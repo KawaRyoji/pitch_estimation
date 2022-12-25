@@ -1,0 +1,64 @@
+import itertools
+
+from deep_learning.dataset import DatasetParams
+from deep_learning.experiment import KCVExperiment
+from pitch_estimation.experiments.prepare_dataset import log_spectrum_2d
+from pitch_estimation.models.Conformer import Conformer
+from tensorflow.keras.metrics import AUC, Precision, Recall
+from tensorflow.keras.optimizers import Adam
+from tensorflow_addons.metrics import F1Score
+
+
+frame_lens = [1024, 2048]
+normalize = [True]
+frame_shift = 256
+frame_num = 16
+fft_point = 2048
+dataset_params = DatasetParams(
+    batch_size=32,
+    epochs=10,
+    steps_per_epoch=500,
+)
+k = 5
+
+conformer = Conformer(
+    Conformer.Params.small(input_size=(frame_num, 1024)),
+    "binary_crossentropy",
+    Adam(learning_rate=0.0001),
+    metrics=[
+        Precision(name="precision"),
+        Recall(name="recall"),
+        F1Score(num_classes=128, threshold=0.5, average="micro", name="F1"),
+        AUC(curve="PR"),
+    ],
+)
+
+for frame_len, norm in itertools.product(frame_lens, normalize):
+    train_set, test_set = log_spectrum_2d(
+        dir="./resources/datasets",
+        frame_len=frame_len,
+        frame_shift=frame_shift,
+        frame_num=frame_num,
+        normalize=norm,
+        fft_point=fft_point,
+    )
+
+    root_dir = "./results/Conformer/log_spectrum/l{}_s{}_t{}_n{}".format(
+        frame_len, frame_shift, frame_num, norm
+    )
+
+    experiment = KCVExperiment(
+        dnn=conformer,
+        root_dir=root_dir,
+        train_set=train_set,
+        test_set=test_set,
+        dataset_params=dataset_params,
+        k=k,
+        gpu=0,
+    )
+
+    experiment.train()
+    experiment.test()
+    experiment.plot()
+    del train_set
+    del test_set

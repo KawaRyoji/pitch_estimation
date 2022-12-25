@@ -2,15 +2,27 @@ import itertools
 
 from deep_learning.dataset import DatasetParams
 from deep_learning.experiment import KCVExperiment
-from pitch_estimation.experiments.prepare_dataset import waveform_1d
-from pitch_estimation.models.DA_Net import DA_Net
+from pitch_estimation.experiments.prepare_dataset import spectrum_2d
+from pitch_estimation.models.Conformer import Conformer
 from tensorflow.keras.metrics import AUC, Precision, Recall
 from tensorflow.keras.optimizers import Adam
 from tensorflow_addons.metrics import F1Score
 
 
-da_net = DA_Net(
-    DA_Net.Params(),
+frame_lens = [512, 1024, 2048]
+normalize = [True, False]
+frame_shift = 256
+frame_num = 128
+fft_point = 2048
+dataset_params = DatasetParams(
+    batch_size=32,
+    epochs=100,
+    steps_per_epoch=500,
+)
+k = 5
+
+conformer = Conformer(
+    Conformer.Params.medium(input_size=(frame_num, 1024)),
     "binary_crossentropy",
     Adam(learning_rate=0.0001),
     metrics=[
@@ -21,42 +33,33 @@ da_net = DA_Net(
     ],
 )
 
-frame_lens = [1024]
-normalize = [True, False]
-frame_shift = 256
-train_method = "kcv"
-dataset_params = DatasetParams(
-    batch_size=32,
-    epochs=100,
-    steps_per_epoch=500,
-)
-k = 5
-valid_split = 0.8
 
 for frame_len, norm in itertools.product(frame_lens, normalize):
-    train_set, test_set = waveform_1d(
+    train_set, test_set = spectrum_2d(
         dir="./resources/datasets",
         frame_len=frame_len,
         frame_shift=frame_shift,
+        frame_num=frame_num,
         normalize=norm,
+        fft_point=fft_point,
     )
 
-    root_dir = "./results/DA-Net/waveform/l{}_s{}_n{}".format(
-        frame_len, frame_shift, norm
+    root_dir = "./results/Conformer/spectrum/l{}_s{}_t{}_n{}".format(
+        frame_len, frame_shift, frame_num, norm
     )
 
     experiment = KCVExperiment(
-        dnn=da_net,
+        dnn=conformer,
         root_dir=root_dir,
         train_set=train_set,
         test_set=test_set,
         dataset_params=dataset_params,
-        train_method=train_method,
         k=k,
-        valid_split=valid_split,
         gpu=0,
     )
 
     experiment.train()
     experiment.test()
     experiment.plot()
+    del train_set
+    del test_set

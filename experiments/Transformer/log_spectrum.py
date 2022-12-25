@@ -1,64 +1,30 @@
 import itertools
-import os
 
-from deep_learning.dataset import Dataset, DatasetParams
-from deep_learning.experiment import DNNExperiment
-from audio_processing.audio import FrameParameter, SpectrumParameter
-from pitch_estimation.models import Transformer
-from pitch_estimation.musicnet import MusicNet
+from deep_learning.dataset import DatasetParams
+from deep_learning.experiment import KCVExperiment
+from pitch_estimation.experiments.prepare_dataset import log_spectrum_2d
+from pitch_estimation.models.Transformer import Transformer
+from tensorflow.keras.metrics import AUC, Precision, Recall
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.metrics import Precision, Recall, AUC
 from tensorflow_addons.metrics import F1Score
-
-musicnet = MusicNet("./resources/musicnet16k")
-
-
-def prepare_dataset(
-    frame_len: int, frame_shift: int, time_len: int, normalize: bool, fft_point: int
-):
-    train_path = "./resources/datasets/log_spectrum2D/train_l{}_s{}_t{}_n{}.npz".format(
-        frame_len, frame_shift, time_len, normalize
-    )
-    test_path = "./resources/datasets/log_spectrum2D/test_l{}_s{}_t{}_n{}.npz".format(
-        frame_len, frame_shift, time_len, normalize
-    )
-
-    if os.path.exists(train_path) and os.path.exists(test_path):
-        train_set = Dataset.load(train_path)
-        test_set = Dataset.load(test_path)
-    else:
-        frame_param = FrameParameter(frame_len=frame_len, frame_shift=frame_shift)
-        spectrum_param = SpectrumParameter(fft_point=fft_point, window="hann")
-        train_set, test_set = musicnet.to_dataset(
-            frame_param=frame_param,
-            feature="log spectrum",
-            normalize=normalize,
-            time_len=time_len,
-            include_nyquist=False,
-            train_set_path=train_path,
-            test_set_path=test_path,
-            spectrum_param=spectrum_param,
-        )
-
-    return train_set, test_set
 
 
 frame_lens = [512, 1024, 2048]
 normalize = [True, False]
 frame_shift = 256
-time_len = 16
+frame_num = 16
 fft_point = 2048
 train_method = "kcv"
 dataset_params = DatasetParams(
     batch_size=32,
     epochs=100,
-    batches_per_epoch=500,
+    steps_per_epoch=500,
 )
 k = 5
 valid_split = 0.8
 
 transformer = Transformer(
-    Transformer.Params(data_length=time_len),
+    Transformer.Params(data_length=frame_num),
     "binary_crossentropy",
     Adam(learning_rate=0.0001),
     metrics=[
@@ -70,19 +36,20 @@ transformer = Transformer(
 )
 
 for frame_len, norm in itertools.product(frame_lens, normalize):
-    train_set, test_set = prepare_dataset(
+    train_set, test_set = log_spectrum_2d(
+        dir="./resources/datasets",
         frame_len=frame_len,
         frame_shift=frame_shift,
-        time_len=time_len,
+        frame_num=frame_num,
         normalize=norm,
         fft_point=fft_point,
     )
 
     root_dir = "./results/Transformer/log_spectrum/l{}_s{}_t{}_n{}".format(
-        frame_len, frame_shift, time_len, norm
+        frame_len, frame_shift, frame_num, norm
     )
 
-    experiment = DNNExperiment(
+    experiment = KCVExperiment(
         dnn=transformer,
         root_dir=root_dir,
         train_set=train_set,
