@@ -1,6 +1,7 @@
 from typing import Optional
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Dropout, Layer, Conv1D
+from pitch_estimation.layers.util import shape_list
 
 
 class MultiHeadAttention(Layer):
@@ -93,7 +94,7 @@ class RelativeMultiHeadAttention(Layer):
         pos_emb: tf.Tensor,
         mask: Optional[tf.Tensor] = None,
     ) -> tf.Tensor:
-        batch_size, _, _ = tf.unstack(tf.shape(query))
+        batch_size, _, _ = shape_list(query)
 
         query = self._split_head(self.q_linear(query), batch_size)  # (B, H, QL, HD)
         key = self._split_head(self.k_linear(key), batch_size)  # (B, H, KL, HD)
@@ -106,9 +107,9 @@ class RelativeMultiHeadAttention(Layer):
         pos_logit = tf.matmul(query, pos_emb, transpose_b=True)  # (B, H, QL, PL)
         pos_logit = self._relative_shift(pos_logit)
 
-        logit: tf.Tensor = (content_logit + pos_logit) * (
-            self.dim**-0.5
-        )  # (B, H, QL, KL)
+        logit: tf.Tensor = (
+            content_logit + pos_logit
+        ) / self.dim**0.5  # (B, H, QL, KL)
 
         if mask is not None:
             logit = tf.where(mask, logit.dtype.min, logit)
@@ -117,6 +118,7 @@ class RelativeMultiHeadAttention(Layer):
         attention_score = self.do(attention_score)  # (B, H, QL, KL)
 
         context = tf.matmul(attention_score, value)  # (B, H, QL, HD)
+        context = tf.transpose(context, [0, 2, 1, 3])  # (B, QL, H, HD)
         context = tf.reshape(context, [batch_size, -1, self.dim])  # (B, QL, D)
 
         return self.o_linear(context)
@@ -128,33 +130,37 @@ class RelativeMultiHeadAttention(Layer):
     # Skew アルゴリズム
     # https://jaketae.github.io/study/relative-positional-encoding/
     def _relative_shift(self, pos_score: tf.Tensor) -> tf.Tensor:
-        # (B, H, L, L)
+        shape = tf.shape(pos_score)  # (B, H, L, L)
         pos_score = tf.pad(
             pos_score, [[0, 0], [0, 0], [0, 0], [1, 0]]
         )  # (B, H, L, 1 + L)
-        pos_score = tf.transpose(pos_score, [0, 1, 3, 2])  # (B, H, 1 + L, L)
-        return pos_score[:, :, 1:]  # (B, H, L, L)
+        pos_score = tf.reshape(
+            pos_score, [shape[0], shape[1], shape[3] + 1, shape[2]]
+        )  # (B, H, 1 + L, L)
+        return pos_score[:, :, 1:, :]  # (B, H, L, L)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "dim": self.dim,
+                "dim_head": self.dim_head,
+                "heads": self.heads,
+            }
+        )
+        config.update(self.q_linear.get_config())
+        config.update(self.k_linear.get_config())
+        config.update(self.v_linear.get_config())
+        config.update(self.pos_linear.get_config())
+        config.update(self.o_linear.get_config())
+        config.update(self.do.get_config())
+        return config
 
 
 class GLU(Layer):
     def __init__(
-        self, axis: int, trainable=True, name=None, dtype=None, dynamic=False, **kwargs
-    ) -> None:
-        super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.axis = axis
-
-    def call(self, inputs: tf.Tensor) -> tf.Tensor:
-        out, gate = tf.split(inputs, 2, axis=self.axis)
-        return out * tf.sigmoid(gate)
-
-
-class DepthwiseConv1d(Layer):
-    def __init__(
         self,
-        dim: int,
-        kernel_size: int,
-        stride: int = 1,
-        padding="valid",
+        axis: int = -1,
         trainable=True,
         name=None,
         dtype=None,
@@ -162,13 +168,13 @@ class DepthwiseConv1d(Layer):
         **kwargs
     ) -> None:
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.conv = Conv1D(
-            filters=dim,
-            kernel_size=kernel_size,
-            groups=dim,
-            strides=stride,
-            padding=padding,
-        )
+        self.axis = axis
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
-        return self.conv(inputs)
+        out, gate = tf.split(inputs, 2, axis=self.axis)
+        return tf.multiply(out, tf.nn.sigmoid(gate))
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"axis": self.axis})
+        return config

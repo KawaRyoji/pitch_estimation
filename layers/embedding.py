@@ -1,46 +1,48 @@
-from ast import Lambda
 import tensorflow as tf
-import numpy as np
-from tensorflow.keras.layers import Layer, Lambda
+from tensorflow.keras.layers import Layer
+
+from pitch_estimation.layers.util import shape_list
 
 
 class PositionalEmbedding(Layer):
     def __init__(
-        self,
-        dim: int,
-        max_len=10000,
-        trainable=True,
-        name=None,
-        dtype=tf.float32,
-        dynamic=False,
-        **kwargs
+        self, trainable=True, name=None, dtype=tf.float32, dynamic=False, **kwargs
     ) -> None:
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.dim = dim
-        self.max_len = max_len
-        self.pe = tf.Variable(self.__create(), name="positional_embedding", dtype=dtype)
 
-    def call(self, length: int) -> tf.Tensor:
-        return self.pe[:length, :]
+    def call(self, inputs: tf.Tensor) -> tf.Tensor:
+        batch_size, max_len, dim = shape_list(inputs)
+        pe = self.encode(max_len, dim)
+        pe = tf.tile(pe, [batch_size, 1, 1])
+        return tf.cast(pe, dtype=inputs.dtype)
 
-    def __create(self) -> tf.Tensor:
-        # NOTE: expend_dims(x, 0)とすると[x]から[1, shape(x)]となる
-        #       これに加えてtile(expand_dims(x, 0), [nums, 1])とすると[nums, shape(x)]となり
-        #       テンソルxを縦にnums回並べたテンソルとなる
+    @staticmethod
+    def encode(max_len: int, dim: int) -> tf.Tensor:
+        dim_f = tf.cast(dim, dtype=tf.float32)
+        pos = tf.expand_dims(tf.range(max_len - 1, -1, -1.0, dtype=tf.float32), axis=1)
+        index = tf.expand_dims(tf.range(0, dim, dtype=tf.float32), axis=0)
 
-        dim_counter = tf.range(self.dim) // 2 * 2  # 0, 0, 2, 2, 4, ...
-        dim_matrix = tf.tile(tf.expand_dims(dim_counter, 0), [self.max_len, 1])
-        dim_matrix = tf.pow(10000.0, tf.cast(dim_matrix / self.dim, self.dtype))
+        pe = pos * (1 / tf.pow(10000.0, (2 * (index // 2)) / dim_f))
 
-        phase = (
-            tf.cast(tf.range(self.dim) % 2, self.dtype) % np.pi / 2
-        )  # 0, pi/2, 0, pi/2, ...
-        phase_matrix = tf.tile(tf.expand_dims(phase, 0), [self.max_len, 1])
-
-        pos_counter = tf.range(self.max_len)
-        pos_matrix = tf.cast(
-            tf.tile(tf.expand_dims(pos_counter, 1), [1, self.dim]), self.dtype
+        # Sin cos will be [max_len, size // 2]
+        # we add 0 between numbers by using padding and reshape
+        sin = tf.pad(
+            tf.expand_dims(tf.sin(pe[:, 0::2]), -1),
+            [[0, 0], [0, 0], [0, 1]],
+            mode="CONSTANT",
+            constant_values=0,
         )
+        sin = tf.reshape(sin, [max_len, dim])
+        cos = tf.pad(
+            tf.expand_dims(tf.cos(pe[:, 1::2]), -1),
+            [[0, 0], [0, 0], [1, 0]],
+            mode="CONSTANT",
+            constant_values=0,
+        )
+        cos = tf.reshape(cos, [max_len, dim])
+        # Then add sin and cos, which results in [time, size]
+        pe = tf.add(sin, cos)
+        return tf.expand_dims(pe, axis=0)  # [1, time, size]
 
-        pe = tf.sin(pos_matrix / dim_matrix + phase_matrix)
-        return pe
+    def get_config(self):
+        return super().get_config()

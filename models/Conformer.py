@@ -2,24 +2,11 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import tensorflow as tf
+
 from deep_learning.dnn import DNN, ModelParams
-from pitch_estimation.layers.common import (
-    GLU,
-    DepthwiseConv1d,
-    RelativeMultiHeadAttention,
-)
+from pitch_estimation.layers.common import GLU, RelativeMultiHeadAttention
 from pitch_estimation.layers.embedding import PositionalEmbedding
-from tensorflow.keras import Model, Sequential
-from tensorflow.keras.layers import (
-    Activation,
-    BatchNormalization,
-    Conv1D,
-    Dense,
-    Dropout,
-    Input,
-    Layer,
-    LayerNormalization,
-)
+from pitch_estimation.layers.util import shape_list
 
 
 class Conformer(DNN):
@@ -42,7 +29,6 @@ class Conformer(DNN):
                 encoder_dim=144,
                 heads=4,
                 kernel_size=31,
-                ffn_expansion_factor=4,
                 dropout=0.1,
                 output_dim=output_dim,
             )
@@ -55,7 +41,6 @@ class Conformer(DNN):
                 encoder_dim=256,
                 heads=4,
                 kernel_size=31,
-                ffn_expansion_factor=4,
                 dropout=0.1,
                 output_dim=output_dim,
             )
@@ -68,44 +53,87 @@ class Conformer(DNN):
                 encoder_dim=512,
                 heads=8,
                 kernel_size=31,
-                ffn_expansion_factor=4,
                 dropout=0.1,
                 output_dim=output_dim,
             )
 
-    def definition(self, param: Params) -> Model:
-        x = Input(shape=param.input_size, name="input", dtype="float32")  # (B, T, F)
+    def get_model(self) -> Optional[tf.keras.Model]:
+        return self.__model
 
-        y = Dense(param.encoder_dim, name="fix_dim")(x)  # 入力の次元をEncoder Dim に調整
-        y = Dropout(param.dropout, name="input-do")(y)
+    def definition(self, param: Params) -> tf.keras.Model:
+        x = tf.keras.layers.Input(
+            shape=param.input_size, name="input", dtype="float32"
+        )  # (B, T, F)
 
-        for i in range(param.encoder_layers):
-            y = ConformerBlock(
-                dim=param.encoder_dim,
-                heads=param.heads,
-                ffn_expansion_factor=param.ffn_expansion_factor,
-                kernel_size=param.kernel_size,
-                dropout=param.dropout,
-                name="conformer%d" % i,
-            )(y)
+        y = ConformerEncoder(
+            dim=param.encoder_dim,
+            num_layers=param.encoder_layers,
+            num_heads=param.heads,
+            kernel_size=param.kernel_size,
+            dropout_rate=param.dropout,
+        )(x)
 
-        y = Dense(param.output_dim, activation="sigmoid", name="output")(y)
+        y = tf.keras.layers.Dense(param.output_dim, activation="sigmoid", name="output")(y)
 
-        model = Model(inputs=x, outputs=y)
+        model = tf.keras.Model(inputs=x, outputs=y)
 
         return model
 
 
+class ConformerEncoder(tf.keras.Model):
+    def __init__(
+        self,
+        dim: int,
+        num_layers: int,
+        num_heads: int,
+        kernel_size: int,
+        dropout_rate: float,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.fix_dim = tf.keras.layers.Dense(dim, name="fix-dim")
+        self.pe = PositionalEmbedding(name="pos-emb")
+        self.do = tf.keras.layers.Dropout(dropout_rate, name="pre-encoder-do")
+        self.blocks = [
+            ConformerBlock(
+                dim,
+                heads=num_heads,
+                kernel_size=kernel_size,
+                dropout=dropout_rate,
+                name="conformer-block-%d" % i,
+            )
+            for i in range(num_layers)
+        ]
+
+    def call(self, inputs: tf.Tensor, training=None, mask=None) -> tf.Tensor:
+        outputs = self.fix_dim(inputs)
+        pe = self.pe(outputs)
+        outputs = self.do(outputs)
+        for block in self.blocks:
+            outputs = block(outputs, pe=pe)
+        return outputs
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(self.fix_dim.get_config())
+        config.update(self.pe.get_config())
+        config.update(self.do.get_config())
+        for block in self.blocks:
+            config.update(block.get_config())
+
+        return config
+
+
 # 参考https://github.com/sooftware/conformer/blob/main/conformer
-class ConformerBlock(Layer):
+class ConformerBlock(tf.keras.layers.Layer):
     def __init__(
         self,
         dim: int,
         heads: int = 8,
-        ffn_expansion_factor: int = 4,
-        kernel_size: int = 31,
+        kernel_size: int = 32,
         dropout: float = 0.1,
-        max_length: int = 10000,
         trainable=True,
         name=None,
         dtype=None,
@@ -113,32 +141,37 @@ class ConformerBlock(Layer):
         **kwargs,
     ) -> None:
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.ff1 = FeedForwardModule(
-            dim, expansion_factor=ffn_expansion_factor, dropout=dropout
-        )
-        self.mhsa = MultiHeadedSelfAttentionModule(
-            dim, heads=heads, dropout=dropout, max_length=max_length
-        )
+        self.ff1 = FeedForwardModule(dim, dropout=dropout)
+        self.mhsa = MultiHeadedSelfAttentionModule(dim, heads=heads)
         self.conv = ConvolutionModule(dim, kernel_size=kernel_size, dropout=dropout)
-        self.ff2 = FeedForwardModule(
-            dim, expansion_factor=ffn_expansion_factor, dropout=dropout
-        )
-        self.ln = LayerNormalization()
+        self.ff2 = FeedForwardModule(dim, dropout=dropout)
+        self.ln = tf.keras.layers.LayerNormalization()
 
-    def call(self, inputs: tf.Tensor, mask: Optional[tf.Tensor] = None) -> tf.Tensor:
+    def call(
+        self, inputs: tf.Tensor, pe: tf.Tensor, mask: Optional[tf.Tensor] = None
+    ) -> tf.Tensor:
         # inputs (Batch, Length, Dim)
-        inputs = self.ff1(inputs) * 0.5 + inputs
-        inputs = self.mhsa(inputs, mask=mask) + inputs
-        inputs = self.conv(inputs) + inputs
-        inputs = self.ff2(inputs) * 0.5 + inputs
-        return self.ln(inputs)
+        outputs = self.ff1(inputs)
+        outputs = self.mhsa(outputs, pe=pe, mask=mask)
+        outputs = self.conv(outputs)
+        outputs = self.ff2(outputs)
+        return self.ln(outputs)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(self.ff1.get_config())
+        config.update(self.mhsa.get_config())
+        config.update(self.conv.get_config())
+        config.update(self.ff2.get_config())
+        config.update(self.ln.get_config())
+        return config
 
 
-class FeedForwardModule(Layer):
+class FeedForwardModule(tf.keras.layers.Layer):
     def __init__(
         self,
         dim: int,
-        expansion_factor: int = 4,
+        rc_factor: float = 0.5,
         dropout: float = 0.1,
         trainable=True,
         name=None,
@@ -147,27 +180,45 @@ class FeedForwardModule(Layer):
         **kwargs,
     ) -> None:
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.net = Sequential(
-            [
-                LayerNormalization(),
-                Dense(dim * expansion_factor, activation="swish"),
-                Dropout(dropout),
-                Dense(dim),
-                Dropout(dropout),
-            ]
-        )
+        self.rc_factor = rc_factor
 
-    def call(self, inputs: tf.Tensor) -> tf.Tensor:
-        return self.net(inputs)
+        self.ln = tf.keras.layers.LayerNormalization()
+        self.ffn1 = tf.keras.layers.Dense(4 * dim)
+        self.swish = tf.keras.layers.Activation(tf.nn.swish)
+        self.do1 = tf.keras.layers.Dropout(dropout)
+        self.ffn2 = tf.keras.layers.Dense(dim)
+        self.do2 = tf.keras.layers.Dropout(dropout)
+        self.res_add = tf.keras.layers.Add()
+
+    def call(self, inputs: tf.Tensor, training=False) -> tf.Tensor:
+        outputs = self.ln(inputs, training=training)
+        outputs = self.ffn1(outputs, training=training)
+        outputs = self.swish(outputs)
+        outputs = self.do1(outputs, training=training)
+        outputs = self.ffn2(outputs, training=training)
+        outputs = self.do2(outputs, training=training)
+        outputs = self.res_add([inputs, self.rc_factor * outputs])
+        return outputs
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"rc_factor": self.rc_factor})
+        config.update(self.ln.get_config())
+        config.update(self.ffn1.get_config())
+        config.update(self.swish.get_config())
+        config.update(self.do1.get_config())
+        config.update(self.ffn2.get_config())
+        config.update(self.do2.get_config())
+        config.update(self.res_add.get_config())
+        return config
 
 
-class MultiHeadedSelfAttentionModule(Layer):
+class MultiHeadedSelfAttentionModule(tf.keras.layers.Layer):
     def __init__(
         self,
         dim: int,
         heads: int = 8,
         dropout: float = 0.1,
-        max_length: int = 10000,
         trainable=True,
         name=None,
         dtype=None,
@@ -175,26 +226,31 @@ class MultiHeadedSelfAttentionModule(Layer):
         **kwargs,
     ) -> None:
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.positional_emb = PositionalEmbedding(dim, max_len=max_length)
-        self.ln = LayerNormalization()
+        self.ln = tf.keras.layers.LayerNormalization()
         self.attention = RelativeMultiHeadAttention(dim, heads=heads, dropout=dropout)
-        self.do = Dropout(dropout)
+        self.do = tf.keras.layers.Dropout(dropout)
+        self.res_add = tf.keras.layers.Add()
 
-    def call(self, inputs: tf.Tensor, mask: Optional[tf.Tensor] = None) -> tf.Tensor:
-        batch_size, length, _ = tf.unstack(tf.shape(inputs))
-        pe = tf.tile(
-            tf.expand_dims(self.positional_emb(length), axis=0), [batch_size, 1, 1]
+    def call(
+        self, inputs: tf.Tensor, pe: tf.Tensor, mask: Optional[tf.Tensor] = None
+    ) -> tf.Tensor:
+        outputs = self.ln(inputs)
+        outputs = self.attention(
+            query=outputs, key=outputs, value=outputs, pos_emb=pe, mask=mask
         )
+        outputs = self.do(outputs)
+        return self.res_add([inputs, outputs])
 
-        inputs = self.ln(inputs)
-        inputs = self.attention(
-            query=inputs, key=inputs, value=inputs, pos_emb=pe, mask=mask
-        )
+    def get_config(self):
+        config = super().get_config()
+        config.update(self.ln.get_config())
+        config.update(self.attention.get_config())
+        config.update(self.do.get_config())
+        config.update(self.res_add.get_config())
+        return config
 
-        return self.do(inputs)
 
-
-class ConvolutionModule(Layer):
+class ConvolutionModule(tf.keras.layers.Layer):
     def __init__(
         self,
         dim: int,
@@ -207,26 +263,51 @@ class ConvolutionModule(Layer):
         **kwargs,
     ) -> None:
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.net = Sequential(
-            [
-                LayerNormalization(),  # (B, L, D)
-                Conv1D(
-                    filters=dim * 2,
-                    kernel_size=1,
-                    strides=1,
-                ),  # (B, L, D * 2)
-                GLU(axis=-1),  # (B, L, D) 以降同じ
-                DepthwiseConv1d(
-                    dim=dim,
-                    kernel_size=kernel_size,
-                    padding="same",
-                ),
-                BatchNormalization(),
-                Activation("swish"),
-                Conv1D(filters=dim, kernel_size=1),
-                Dropout(dropout),
-            ]
+        self.ln = tf.keras.layers.LayerNormalization()  # (B, L, D)
+        self.pw_conv1 = tf.keras.layers.Conv2D(
+            filters=dim * 2,
+            kernel_size=1,
+            strides=1,
+        )  # (B, L, D * 2)
+        self.glu = GLU()  # (B, L, D) 以降同じ
+        self.dw_conv = tf.keras.layers.DepthwiseConv2D(
+            kernel_size=(kernel_size, 1),
+            strides=1,
+            padding="same",
         )
+        self.bn = tf.keras.layers.BatchNormalization()
+        self.swish = tf.keras.layers.Activation(tf.nn.swish)
+        self.pw_conv2 = tf.keras.layers.Conv2D(
+            filters=dim,
+            kernel_size=1,
+            strides=1,
+        )
+        self.do = tf.keras.layers.Dropout(dropout)
+        self.res_add = tf.keras.layers.Add()
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
-        return self.net(inputs)
+        outputs = self.ln(inputs)
+        B, L, D = shape_list(outputs)
+        outputs = tf.reshape(outputs, [B, L, 1, D])
+        outputs = self.pw_conv1(outputs)
+        outputs = self.glu(outputs)
+        outputs = self.dw_conv(outputs)
+        outputs = self.bn(outputs)
+        outputs = self.swish(outputs)
+        outputs = self.pw_conv2(outputs)
+        outputs = tf.reshape(outputs, [B, L, D])
+        outputs = self.do(outputs)
+        return self.res_add([inputs, outputs])
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(self.ln.get_config())
+        config.update(self.pw_conv1.get_config())
+        config.update(self.glu.get_config())
+        config.update(self.dw_conv.get_config())
+        config.update(self.bn.get_config())
+        config.update(self.swish.get_config())
+        config.update(self.pw_conv2.get_config())
+        config.update(self.do.get_config())
+        config.update(self.res_add.get_config())
+        return config

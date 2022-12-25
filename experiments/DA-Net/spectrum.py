@@ -1,8 +1,7 @@
 import itertools
-import os
 
 from deep_learning.dataset import DatasetParams
-from deep_learning.experiment import DNNExperiment
+from deep_learning.experiment import KCVExperiment
 from pitch_estimation.experiments.prepare_dataset import spectrum_1d
 from pitch_estimation.models.DA_Net import DA_Net
 from tensorflow.keras.metrics import AUC, Precision, Recall
@@ -30,7 +29,7 @@ train_method = "kcv"
 dataset_params = DatasetParams(
     batch_size=32,
     epochs=100,
-    batches_per_epoch=500,
+    steps_per_epoch=500,
 )
 k = 5
 valid_split = 0.8
@@ -48,7 +47,7 @@ for frame_len, norm in itertools.product(frame_lens, normalize):
         frame_len, frame_shift, norm
     )
 
-    experiment = DNNExperiment(
+    experiment = KCVExperiment(
         dnn=da_net,
         root_dir=root_dir,
         train_set=train_set,

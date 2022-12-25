@@ -1,7 +1,7 @@
 import itertools
 
 from deep_learning.dataset import DatasetParams
-from deep_learning.experiment import DNNExperiment
+from deep_learning.experiment import KCVExperiment
 from pitch_estimation.experiments.prepare_dataset import spectrum_2d
 from pitch_estimation.models.Conformer import Conformer
 from tensorflow.keras.metrics import AUC, Precision, Recall
@@ -14,14 +14,12 @@ normalize = [True, False]
 frame_shift = 256
 frame_num = 128
 fft_point = 2048
-train_method = "kcv"
 dataset_params = DatasetParams(
     batch_size=32,
     epochs=100,
-    batches_per_epoch=500,
+    steps_per_epoch=500,
 )
 k = 5
-valid_split = 0.8
 
 conformer = Conformer(
     Conformer.Params.medium(input_size=(frame_num, 1024)),
@@ -50,15 +48,13 @@ for frame_len, norm in itertools.product(frame_lens, normalize):
         frame_len, frame_shift, frame_num, norm
     )
 
-    experiment = DNNExperiment(
+    experiment = KCVExperiment(
         dnn=conformer,
         root_dir=root_dir,
         train_set=train_set,
         test_set=test_set,
         dataset_params=dataset_params,
-        train_method=train_method,
         k=k,
-        valid_split=valid_split,
         gpu=0,
     )
 

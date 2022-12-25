@@ -4,17 +4,6 @@ from dataclasses import dataclass, field
 import tensorflow as tf
 from deep_learning.dnn import DNN, ModelParams
 from pitch_estimation.layers.common import MultiHeadAttention, SelfAttention
-from tensorflow.keras import Model
-from tensorflow.keras.layers import (
-    Add,
-    Dense,
-    Dropout,
-    Input,
-    Lambda,
-    Layer,
-    LayerNormalization,
-)
-from tensorflow.keras.optimizers.schedules import LearningRateSchedule
 
 
 class Transformer(DNN):
@@ -23,22 +12,22 @@ class Transformer(DNN):
         encoder_input_dim: int = field(default=1024)
         output_dim: int = field(default=128)
         data_length: int = field(default=16)
-        decoder: Layer = field(default=Dense(128))
+        decoder: tf.keras.layers.Layer = field(default=tf.keras.layers.Dense(128))
         hidden_dim: int = field(default=512)
         ffn_dim: int = field(default=2048)
         num_layer: int = field(default=6)
         num_head: int = field(default=8)
         dropout_rate: float = field(default=0.1)
 
-    def definition(self, params: Params) -> Model:
-        input = Input(
+    def definition(self, params: Params) -> tf.keras.Model:
+        input = tf.keras.layers.Input(
             shape=(
                 params.data_length,
                 params.encoder_input_dim,
             )
         )
 
-        mask = Lambda(self._create_enc_self_attention_mask)(input)
+        mask = tf.keras.layers.Lambda(self._create_enc_self_attention_mask)(input)
 
         y = Encoder(
             params.hidden_dim,
@@ -50,9 +39,9 @@ class Transformer(DNN):
 
         y = params.decoder(y)
 
-        output = Dense(params.output_dim, activation="sigmoid")(y)
+        output = tf.keras.layers.Dense(params.output_dim, activation="sigmoid")(y)
 
-        model = Model(inputs=input, outputs=output)
+        model = tf.keras.Model(inputs=input, outputs=output)
 
         return model
 
@@ -64,7 +53,7 @@ class Transformer(DNN):
         return tf.reshape(array, [batch_size, 1, 1, length])
 
 
-class Encoder(Layer):
+class Encoder(tf.keras.layers.Layer):
     def __init__(
         self,
         hidden_dim: int,
@@ -85,7 +74,7 @@ class Encoder(Layer):
 
         self.token_embedding = TokenEmbedding(hidden_dim)
         self.add_position_encoding = AddPositionalEncoding()
-        self.dropout = Dropout(dropout_rate)
+        self.dropout = tf.keras.layers.Dropout(dropout_rate)
 
         self.enc_blocks = []
         for _ in range(num_layer):
@@ -98,7 +87,7 @@ class Encoder(Layer):
                 ]
             )
 
-        self.layer_normalization = LayerNormalization()
+        self.layer_normalization = tf.keras.layers.LayerNormalization()
 
     def call(self, input: tf.Tensor, mask: tf.Tensor) -> tf.Tensor:
         embedded_input = self.token_embedding(input)
@@ -114,7 +103,7 @@ class Encoder(Layer):
         return self.layer_normalization(query)
 
 
-class Decoder(Layer):
+class Decoder(tf.keras.layers.Layer):
     def __init__(
         self,
         hidden_dim: int,
@@ -137,7 +126,7 @@ class Decoder(Layer):
 
         self.token_embedding = TokenEmbedding(hidden_dim)
         self.add_position_embedding = AddPositionalEncoding()
-        self.dropout = Dropout(dropout_rate)
+        self.dropout = tf.keras.layers.Dropout(dropout_rate)
 
         self.dec_blocks = []
         for _ in range(num_layer):
@@ -155,8 +144,8 @@ class Decoder(Layer):
                 ]
             )
 
-        self.layer_normalization = LayerNormalization()
-        self.dense = Dense(output_dim)
+        self.layer_normalization = tf.keras.layers.LayerNormalization()
+        self.dense = tf.keras.layers.Dense(output_dim)
 
     def call(
         self,
@@ -182,21 +171,21 @@ class Decoder(Layer):
         return self.dense(query)
 
 
-class TokenEmbedding(Layer):
+class TokenEmbedding(tf.keras.layers.Layer):
     def __init__(self, hidden_dim: int, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.dense = Dense(hidden_dim, use_bias=False)
+        self.dense = tf.keras.layers.Dense(hidden_dim, use_bias=False)
 
     def call(self, input: tf.Tensor) -> tf.Tensor:
         return self.dense(input)
 
 
-class AddPositionalEncoding(Layer):
+class AddPositionalEncoding(tf.keras.layers.Layer):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.layer = Lambda(self._add_positional_encoding)
+        self.layer = tf.keras.layers.Lambda(self._add_positional_encoding)
 
     def call(self, input: tf.Tensor) -> tf.Tensor:
         return self.layer(input)
@@ -229,7 +218,7 @@ class AddPositionalEncoding(Layer):
         return input + positional_encoding
 
 
-class FeedForwardNetwork(Layer):
+class FeedForwardNetwork(tf.keras.layers.Layer):
     def __init__(
         self, hidden_dim: int, ffn_dim: int, dropout_rate: float, *args, **kwargs
     ) -> None:
@@ -239,9 +228,9 @@ class FeedForwardNetwork(Layer):
         self.ffn_dim = ffn_dim
         self.dropout_rate = dropout_rate
 
-        self.input_dense = Dense(ffn_dim, activation="relu")
-        self.dropout = Dropout(dropout_rate)
-        self.output_dense = Dense(hidden_dim)
+        self.input_dense = tf.keras.layers.Dense(ffn_dim, activation="relu")
+        self.dropout = tf.keras.layers.Dropout(dropout_rate)
+        self.output_dense = tf.keras.layers.Dense(hidden_dim)
 
     def call(self, input: tf.Tensor) -> tf.Tensor:
         output = self.input_dense(input)
@@ -249,13 +238,15 @@ class FeedForwardNetwork(Layer):
         return self.output_dense(output)
 
 
-class ResidualNormalizationWrapper(Layer):
-    def __init__(self, layer: Layer, dropout_rate: float, *args, **kwargs) -> None:
+class ResidualNormalizationWrapper(tf.keras.layers.Layer):
+    def __init__(
+        self, layer: tf.keras.layers.Layer, dropout_rate: float, *args, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.layer = layer
-        self.layer_normalization = LayerNormalization()
-        self.dropout = Dropout(dropout_rate)
-        self.add = Add()
+        self.layer_normalization = tf.keras.layers.LayerNormalization()
+        self.dropout = tf.keras.layers.Dropout(dropout_rate)
+        self.add = tf.keras.layers.Add()
 
     def call(self, input: tf.Tensor, **kwargs) -> tf.Tensor:
         output = self.layer_normalization(input)
@@ -265,14 +256,16 @@ class ResidualNormalizationWrapper(Layer):
         return self.add([input, output])
 
 
-class TransformerLearningRateScheduler(LearningRateSchedule):
+class TransformerLearningRateScheduler(
+    tf.keras.optimizers.schedules.LearningRateSchedule
+):
     def __init__(self, max_learning_rate=0.0001, warmup_step=4000) -> None:
         self.max_learning_rate = max_learning_rate
         self.warmup_step = warmup_step
 
     def __call__(self, step) -> float:
         rate = (
-            tf.minimum(step ** -0.5, step * self.warmup_step ** -1.5)
-            / self.warmup_step ** -0.5
+            tf.minimum(step**-0.5, step * self.warmup_step**-1.5)
+            / self.warmup_step**-0.5
         )
         return self.max_learning_rate * rate
